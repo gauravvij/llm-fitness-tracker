@@ -1,5 +1,5 @@
 """
-LLM Fitness Tool - CLI entry point.
+LLM Evaluator Tool - CLI entry point.
 
 Automates the selection and evaluation of LLMs for any user-defined task.
 Uses Gemini 3.1 Pro (via OpenRouter) as the Judge LLM.
@@ -133,8 +133,8 @@ def run_evaluation(
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        prog="llm-fitness",
-        description="Automated LLM Selection & Evaluation Tool",
+        prog="llm-evaluator",
+        description="LLM Evaluator Tool — Automated LLM Selection & Evaluation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -177,7 +177,7 @@ Examples:
 
 
 def main() -> None:
-    """Main entry point for the LLM Fitness Tool CLI."""
+    """Main entry point for the LLM Evaluator Tool CLI."""
     # Validate API key early
     try:
         load_api_key()

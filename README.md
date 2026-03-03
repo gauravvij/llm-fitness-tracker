@@ -1,4 +1,4 @@
-# 🏋️ LLM Fitness Tool
+# 🤖 LLM Evaluator Tool
 
 > Automated LLM Selection & Evaluation — find the best model for *your* task in minutes.
 
@@ -9,15 +9,23 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)](LICENSE)
 
-**[heyneo.com](https://heyneo.com)**
+**[Built by NEO](https://heyneo.com)** - Autonomous AI Engineering Agent
 
 </div>
 
 ---
 
+## 🎬 Demo
+
+https://github.com/gauravvij/llm-fitness-tracker/raw/main/data/llm-evaluator-runtime.webm
+
+> *Watch the LLM Evaluator Tool in action — from task input to ranked results in minutes.*
+
+---
+
 ## ✨ What It Does
 
-LLM Fitness Tool automates the process of selecting and benchmarking the best LLMs for any task you define. It uses **Gemini 3.1 Pro** (via OpenRouter) as a Judge LLM to fairly evaluate candidate models across multiple dimensions.
+LLM Evaluator Tool automates the process of selecting and benchmarking the best LLMs for any task you define. It uses **Gemini 3.1 Pro** (via OpenRouter) as a Judge LLM to fairly evaluate candidate models across multiple dimensions.
 
 ### Core Workflow
 
@@ -146,7 +154,7 @@ python main.py --task "Creative writing assistant" --output-dir ./results
 
 ```
 ╔══════════════════════════════════════════════════════╗
-║          LLM Fitness Tool — Evaluation Report        ║
+║        LLM Evaluator Tool — Evaluation Report        ║
 ╚══════════════════════════════════════════════════════╝
 
 Task: Python software engineering assistant
