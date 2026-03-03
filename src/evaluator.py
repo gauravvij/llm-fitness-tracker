@@ -8,23 +8,42 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from typing import Optional
 
-from .openrouter_client import call_judge
+from pydantic import ValidationError
 
+from .openrouter_client import call_judge
+from .schemas import EvaluationScore, RankingResult, RankingEntry
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler(sys.stdout))
+
+
+# ---------------------------------------------------------------------------
+# JSON extraction helpers
+# ---------------------------------------------------------------------------
 
 def _extract_json_object(text: str) -> dict:
     """
     Robustly extract a JSON object from text that may contain markdown fences,
-    trailing commas, or truncated content. Handles deeply nested JSON objects.
+    thinking tags, trailing commas, or truncated content.
     """
+    if not text or not text.strip():
+        raise ValueError("Cannot extract JSON from: empty response")
+
+    # Remove <think>...</think> blocks (Gemini/DeepSeek reasoning traces)
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     # Strip markdown fences
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
+    cleaned = re.sub(r"```(?:json)?\s*", "", cleaned).strip().rstrip("`").strip()
+
     # Try direct parse first
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
-    # Find the outermost { ... } block tracking full brace depth (handles nesting)
+
+    # Find the outermost { ... } block tracking full brace depth.
+    # We track bracket depth too so nested arrays don't confuse the brace counter.
     brace_depth = 0
+    bracket_depth = 0
     start_idx = None
     in_string = False
     escape_next = False
@@ -32,7 +51,7 @@ def _extract_json_object(text: str) -> dict:
         if escape_next:
             escape_next = False
             continue
-        if ch == '\\' and in_string:
+        if ch == "\\" and in_string:
             escape_next = True
             continue
         if ch == '"' and not escape_next:
@@ -40,63 +59,178 @@ def _extract_json_object(text: str) -> dict:
             continue
         if in_string:
             continue
-        if ch == '{':
+        if ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth -= 1
+        elif ch == "{":
             if brace_depth == 0:
                 start_idx = i
             brace_depth += 1
-        elif ch == '}':
+        elif ch == "}":
             brace_depth -= 1
-            if brace_depth == 0 and start_idx is not None:
-                candidate = cleaned[start_idx:i + 1]
+            # Only attempt parse when ALL braces AND brackets are closed
+            if brace_depth == 0 and bracket_depth == 0 and start_idx is not None:
+                candidate = cleaned[start_idx : i + 1]
                 try:
                     return json.loads(candidate)
                 except json.JSONDecodeError:
-                    # Try fixing trailing commas in this candidate
-                    fixed_candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
+                    fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
                     try:
-                        return json.loads(fixed_candidate)
+                        return json.loads(fixed)
                     except json.JSONDecodeError:
                         pass
-                    # Reset and keep searching
+                    # Don't reset — keep looking for a later valid block
                     start_idx = None
                     brace_depth = 0
-    # Final fallback: fix trailing commas in the whole text
-    fixed = re.sub(r',\s*([}\]])', r'\1', cleaned)
+                    bracket_depth = 0
+
+    # Fix trailing commas in the whole text
+    fixed = re.sub(r",\s*([}\]])", r"\1", cleaned)
     try:
         return json.loads(fixed)
     except json.JSONDecodeError:
         pass
-    # Last resort: extract individual numeric fields via regex and build dict
-    scores = {}
+
+    # Last resort: extract individual numeric fields via regex
+    scores: dict = {}
     for key in ["accuracy", "hallucination", "grounding", "reasoning", "clarity", "overall"]:
         m = re.search(rf'"{key}"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
         if m:
             scores[key] = float(m.group(1))
     if len(scores) >= 3:
-        # Enough fields extracted — fill missing ones and return
         for key in ["accuracy", "hallucination", "grounding", "reasoning", "clarity", "overall"]:
             scores.setdefault(key, 5.0)
         rt = re.search(r'"reasoning_text"\s*:\s*"([^"]*)"', cleaned)
         scores["reasoning_text"] = rt.group(1) if rt else "Extracted via regex fallback."
         return scores
+
     raise ValueError(f"Cannot extract JSON from: {text[:200]}")
 
 
-def _extract_scores_regex(text: str) -> dict:
-    """Extract numeric scores from text using regex as last resort."""
-    scores = {}
-    for key in ["accuracy", "hallucination", "grounding", "reasoning", "tool_calling", "clarity", "overall"]:
-        pattern = rf'"{key}"\s*:\s*(\d+(?:\.\d+)?)'
-        match = re.search(pattern, text)
-        scores[key] = float(match.group(1)) if match else 5.0
-    if "reasoning_text" not in scores:
-        scores["reasoning_text"] = "Extracted via regex fallback."
-    return scores
+def _parse_evaluation_score(raw: str) -> dict:
+    """
+    Parse and validate an evaluation score response using Pydantic.
+
+    Falls back gracefully through multiple strategies before returning defaults.
+
+    Args:
+        raw: Raw text response from the Judge LLM
+
+    Returns:
+        Validated score dict with all required fields populated
+    """
+    # Strategy 1: Extract JSON then validate with Pydantic
+    try:
+        data = _extract_json_object(raw)
+        score = EvaluationScore(**data)
+        return score.to_dict()
+    except (ValueError, ValidationError) as e:
+        logger.debug(f"Pydantic validation failed on extracted JSON: {e}")
+
+    # Strategy 2: Regex extraction of numeric fields
+    scores: dict = {}
+    for key in ["accuracy", "hallucination", "grounding", "reasoning", "clarity", "overall"]:
+        m = re.search(rf'"{key}"\s*:\s*(\d+(?:\.\d+)?)', raw)
+        if m:
+            scores[key] = float(m.group(1))
+    if scores:
+        rt = re.search(r'"reasoning_text"\s*:\s*"([^"]*)"', raw)
+        scores["reasoning_text"] = rt.group(1) if rt else "Extracted via regex fallback."
+        try:
+            score = EvaluationScore(**scores)
+            return score.to_dict()
+        except ValidationError:
+            pass
+
+    # Strategy 3: Return safe defaults via Pydantic
+    logger.warning("All JSON extraction strategies failed; returning default scores.")
+    return EvaluationScore().to_dict()
 
 
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.StreamHandler(sys.stdout))
+def _parse_ranking_result(raw: str, fallback_models: list[tuple[str, dict]]) -> dict:
+    """
+    Parse and validate a ranking response using Pydantic.
 
+    Falls back to score-based ranking if the Judge LLM response cannot be parsed.
+
+    Args:
+        raw: Raw text response from the Judge LLM
+        fallback_models: Sorted list of (model_id, scores) for fallback ranking
+
+    Returns:
+        Validated ranking dict
+    """
+    # Strategy 1: Extract JSON then validate with Pydantic
+    try:
+        data = _extract_json_object(raw)
+        result = RankingResult(**data)
+        return result.to_dict()
+    except (ValueError, ValidationError) as e:
+        logger.warning(f"Failed to parse ranking JSON via Pydantic: {e}")
+
+    # Strategy 2: Try to extract ranking array directly
+    try:
+        arr_match = re.search(r'"ranking"\s*:\s*(\[.*?\])', raw, re.DOTALL)
+        if arr_match:
+            ranking_list = json.loads(arr_match.group(1))
+            result = RankingResult(ranking=ranking_list)
+            return result.to_dict()
+    except (json.JSONDecodeError, ValidationError):
+        pass
+
+    # Strategy 3: Build fallback ranking from aggregated scores
+    logger.warning("Ranking JSON parse failed — building fallback ranking from scores.")
+    entries = []
+    for i, (mid, scores) in enumerate(fallback_models[:3]):
+        overall = scores.get("overall", 0.0)
+        # Derive meaningful strengths/weaknesses from scores
+        strengths = []
+        weaknesses = []
+        if scores.get("hallucination", 0) >= 8:
+            strengths.append("High factual accuracy with minimal hallucination")
+        if scores.get("accuracy", 0) >= 8:
+            strengths.append("Strong response accuracy across test cases")
+        if scores.get("grounding", 0) >= 8:
+            strengths.append("Well-grounded responses tied to prompt requirements")
+        if scores.get("avg_latency", 999) < 15:
+            strengths.append(f"Fast response time ({scores['avg_latency']:.1f}s avg)")
+        if scores.get("accuracy", 10) < 7:
+            weaknesses.append("Accuracy below benchmark threshold on some test cases")
+        if scores.get("grounding", 10) < 7:
+            weaknesses.append("Responses occasionally drift from prompt constraints")
+        if scores.get("avg_latency", 0) > 60:
+            weaknesses.append(f"High latency ({scores['avg_latency']:.1f}s avg) may impact UX")
+        if not strengths:
+            strengths = ["Competitive overall benchmark performance"]
+        if not weaknesses:
+            weaknesses = ["No critical weaknesses identified in benchmark"]
+
+        entries.append(
+            RankingEntry(
+                rank=i + 1,
+                model_id=mid,
+                overall_score=overall,
+                strengths=strengths,
+                weaknesses=weaknesses,
+                recommendation=f"Ranked #{i+1} by aggregated benchmark score ({overall:.1f}/10).",
+            )
+        )
+
+    result = RankingResult(
+        ranking=entries,
+        summary=(
+            "Models ranked by aggregated evaluation scores across all test cases. "
+            "The ranking reflects performance on accuracy, hallucination resistance, "
+            "grounding, reasoning depth, and response clarity."
+        ),
+    )
+    return result.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
 EVALUATION_PROMPT = """You are a rigorous, expert AI evaluator with deep knowledge of LLM capabilities. Your task is to critically evaluate an LLM's response to a benchmark test. You must be STRICT and DISCRIMINATING — do not inflate scores. A score of 8+ should only be given for truly exceptional responses.
 
@@ -141,7 +275,7 @@ You MUST evaluate with the following strict criteria:
 
 ### 4. reasoning (0-10)
 - Does the response demonstrate DEEP reasoning and understanding of the problem?
-- For coding tasks: Does it explain WHY certain approaches are used (e.g., why regex word boundaries prevent the Scunthorpe problem)?
+- For coding tasks: Does it explain WHY certain approaches are used?
 - For debugging tasks: Does it identify ALL bugs, not just the obvious ones?
 - Deduct 2 points for shallow explanations that just state what the code does without explaining why.
 - Deduct 3 points for missing critical edge cases that were explicitly mentioned.
@@ -169,19 +303,13 @@ Formula: overall = (accuracy*0.35 + hallucination*0.20 + grounding*0.20 + reason
 - A response that correctly implements ALL expected elements with proper edge case handling deserves 8-9.
 - Reserve scores of 9-10 for truly exceptional, production-ready responses.
 - Do NOT give the same score to responses of clearly different quality.
+- Be honest about weaknesses — every model has them. Do not leave weaknesses empty.
 
-Return ONLY a valid JSON object with this exact structure:
-{{
-  "accuracy": <0-10>,
-  "hallucination": <0-10>,
-  "grounding": <0-10>,
-  "reasoning": <0-10>,
-  "clarity": <0-10>,
-  "overall": <weighted average using formula above>,
-  "reasoning_text": "<3-4 sentence critical justification explaining the key strengths and weaknesses>"
-}}
+You MUST respond with ONLY a valid JSON object. No markdown fences, no preamble, no explanation outside the JSON.
+The JSON must have exactly these keys: accuracy, hallucination, grounding, reasoning, clarity, overall, reasoning_text.
 
-Be strict. Be fair. Differentiate between responses. Return ONLY the JSON object."""
+Example of the EXACT format required:
+{{"accuracy": 7.5, "hallucination": 9.0, "grounding": 6.5, "reasoning": 7.0, "clarity": 8.0, "overall": 7.65, "reasoning_text": "The response correctly addresses the main requirements but misses two expected elements. The code logic is sound with no hallucinated APIs. Grounding is partial as the response ignores the case-insensitivity constraint. Reasoning is adequate but lacks depth on edge cases."}}"""
 
 
 RANKING_PROMPT = """You are an expert AI systems evaluator with deep practical knowledge of LLM capabilities. Based on the benchmark results below, provide a final ranking and analysis.
@@ -197,24 +325,20 @@ RANKING_PROMPT = """You are an expert AI systems evaluator with deep practical k
 - Consider the CONSISTENCY of performance across all test cases (high variance is a weakness).
 - A model with slightly lower scores but more consistent performance may be preferable.
 - Consider latency as a tiebreaker — faster is better when scores are close (within 0.5 points).
-- Be honest about weaknesses — do not sugarcoat poor performance.
+- Be honest about weaknesses — do NOT leave weaknesses empty. Every model has areas for improvement.
+- Strengths and weaknesses MUST each contain at least 1 specific, concrete item.
 
-Provide a final ranking of the top 3 models. Return ONLY a valid JSON object:
-{{
-  "ranking": [
-    {{
-      "rank": 1,
-      "model_id": "<model_id>",
-      "overall_score": <0-10>,
-      "strengths": ["strength 1", "strength 2"],
-      "weaknesses": ["weakness 1"],
-      "recommendation": "<one sentence why this model is best for the task>"
-    }},
-    ...
-  ],
-  "summary": "<3-4 sentence overall analysis that honestly compares the models and explains the ranking decisions>"
-}}"""
+Provide a final ranking of the top 3 models.
 
+You MUST respond with ONLY a valid JSON object. No markdown fences, no preamble, no explanation outside the JSON.
+The JSON must have exactly this structure:
+
+{{"ranking": [{{"rank": 1, "model_id": "<model_id>", "overall_score": <0-10>, "strengths": ["<specific strength 1>", "<specific strength 2>"], "weaknesses": ["<specific weakness 1>"], "recommendation": "<one sentence why this model is best for the task>"}}, {{"rank": 2, "model_id": "<model_id>", "overall_score": <0-10>, "strengths": ["<specific strength>"], "weaknesses": ["<specific weakness>"], "recommendation": "<one sentence>"}}, {{"rank": 3, "model_id": "<model_id>", "overall_score": <0-10>, "strengths": ["<specific strength>"], "weaknesses": ["<specific weakness>"], "recommendation": "<one sentence>"}}], "summary": "<3-4 sentence overall analysis that honestly compares the models and explains the ranking decisions>"}}"""
+
+
+# ---------------------------------------------------------------------------
+# Core evaluation functions
+# ---------------------------------------------------------------------------
 
 def evaluate_response(
     task_description: str,
@@ -230,16 +354,24 @@ def evaluate_response(
         retry_on_rate_limit: Whether to retry on rate limit errors
 
     Returns:
-        Evaluation dict with scores for each dimension
+        Validated evaluation dict with scores for each dimension
     """
     if result.get("error"):
-        return {
-            "accuracy": 0, "hallucination": 0, "grounding": 0,
-            "reasoning": 0, "tool_calling": 0, "clarity": 0, "overall": 0,
-            "reasoning_text": "Response contained an API error.",
-        }
+        return EvaluationScore(
+            accuracy=0, hallucination=0, grounding=0,
+            reasoning=0, clarity=0,
+            reasoning_text="Response contained an API error.",
+        ).to_dict()
 
     messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a JSON-only responder. You MUST output a single valid JSON object "
+                "and absolutely nothing else — no markdown fences, no preamble, no explanation, "
+                "no thinking tags. Start your response with '{' and end with '}'."
+            ),
+        },
         {
             "role": "user",
             "content": EVALUATION_PROMPT.format(
@@ -249,9 +381,9 @@ def evaluate_response(
                 prompt=result["prompt"],
                 evaluation_criteria=result.get("evaluation_criteria", "N/A"),
                 expected_elements=", ".join(result.get("expected_elements", [])),
-                response=result["response"][:4000],  # Slightly larger window for context
+                response=result["response"][:4000],
             ),
-        }
+        },
     ]
 
     max_retries = 3 if retry_on_rate_limit else 1
@@ -261,42 +393,18 @@ def evaluate_response(
         # Handle rate limit errors with exponential backoff
         if raw.startswith("ERROR:") and ("rate" in raw.lower() or "429" in raw):
             wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
-            logger.warning(f"Rate limit hit for evaluation. Waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+            logger.warning(
+                f"Rate limit hit for evaluation. Waiting {wait_time}s "
+                f"before retry {attempt + 1}/{max_retries}..."
+            )
             time.sleep(wait_time)
             continue
 
-        try:
-            scores = _extract_json_object(raw)
-            # Validate and normalize required keys
-            required = ["accuracy", "hallucination", "grounding", "reasoning", "clarity", "overall"]
-            for key in required:
-                if key not in scores:
-                    scores[key] = 5.0
-                else:
-                    # Clamp scores to valid range
-                    scores[key] = max(0.0, min(10.0, float(scores[key])))
-
-            # Recalculate overall using weighted formula to ensure consistency
-            scores["overall"] = round(
-                scores["accuracy"] * 0.35
-                + scores["hallucination"] * 0.20
-                + scores["grounding"] * 0.20
-                + scores["reasoning"] * 0.15
-                + scores["clarity"] * 0.10,
-                2,
-            )
-
-            # Preserve tool_calling for backward compatibility (map to reasoning if missing)
-            if "tool_calling" not in scores:
-                scores["tool_calling"] = scores.get("reasoning", 5.0)
-
+        scores = _parse_evaluation_score(raw)
+        if scores.get("overall", 0) > 0 or attempt == max_retries - 1:
             return scores
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to parse evaluation JSON (attempt {attempt + 1}): {e}\nRaw: {raw[:300]}")
-            if attempt == max_retries - 1:
-                return _extract_scores_regex(raw)
 
-    return _extract_scores_regex("")
+    return EvaluationScore().to_dict()
 
 
 def evaluate_all_results(
@@ -319,7 +427,6 @@ def evaluate_all_results(
     Returns:
         Dict mapping model_id -> aggregated evaluation scores
     """
-    # Flatten all (model_id, result) pairs for parallel processing
     all_tasks: list[tuple[str, dict]] = []
     for model_id, results in benchmark_results.items():
         for result in results:
@@ -331,7 +438,6 @@ def evaluate_all_results(
         f"({max_parallel_evaluations} concurrent workers)"
     )
 
-    # Store results keyed by (model_id, test_id)
     raw_scores: dict[tuple[str, int], dict] = {}
     completed = 0
 
@@ -360,20 +466,20 @@ def evaluate_all_results(
                 )
             except FuturesTimeoutError:
                 logger.error(f"Evaluation timed out for {model_id_key} test {test_id_key}")
-                raw_scores[(model_id_key, test_id_key)] = {
-                    "accuracy": 0, "hallucination": 0, "grounding": 0,
-                    "reasoning": 0, "tool_calling": 0, "clarity": 0, "overall": 0,
-                    "test_id": test_id_key, "latency": 0,
-                    "reasoning_text": "Evaluation timed out.",
-                }
+                raw_scores[(model_id_key, test_id_key)] = EvaluationScore(
+                    reasoning_text="Evaluation timed out.",
+                ).to_dict()
+                raw_scores[(model_id_key, test_id_key)].update(
+                    {"test_id": test_id_key, "latency": 0}
+                )
             except Exception as e:
                 logger.error(f"Evaluation failed for {model_id_key} test {test_id_key}: {e}")
-                raw_scores[(model_id_key, test_id_key)] = {
-                    "accuracy": 0, "hallucination": 0, "grounding": 0,
-                    "reasoning": 0, "tool_calling": 0, "clarity": 0, "overall": 0,
-                    "test_id": test_id_key, "latency": 0,
-                    "reasoning_text": f"Evaluation error: {str(e)}",
-                }
+                raw_scores[(model_id_key, test_id_key)] = EvaluationScore(
+                    reasoning_text=f"Evaluation error: {str(e)}",
+                ).to_dict()
+                raw_scores[(model_id_key, test_id_key)].update(
+                    {"test_id": test_id_key, "latency": 0}
+                )
 
     # Aggregate scores per model
     model_evaluations: dict[str, dict] = {}
@@ -384,7 +490,7 @@ def evaluate_all_results(
             raw_scores.get((model_id, r["test_id"]), {})
             for r in results
         ]
-        per_test_scores = [s for s in per_test_scores if s]  # filter empty
+        per_test_scores = [s for s in per_test_scores if s]
 
         if per_test_scores:
             aggregated: dict = {}
@@ -396,9 +502,7 @@ def evaluate_all_results(
             aggregated["avg_latency"] = round(sum(latencies) / len(latencies), 3) if latencies else 0.0
             aggregated["per_test"] = per_test_scores
         else:
-            aggregated = {
-                dim: 0.0 for dim in dims
-            }
+            aggregated = {dim: 0.0 for dim in dims}
             aggregated["avg_latency"] = 0.0
             aggregated["per_test"] = []
 
@@ -427,20 +531,22 @@ def rank_models(
         candidates: List of candidate model dicts with metadata
 
     Returns:
-        Ranking dict with top 3 models and analysis
+        Validated ranking dict with top 3 models and analysis
     """
-    # Build summary for the judge
     candidate_map = {c["id"]: c for c in candidates}
     summary_lines = []
+
     for model_id, scores in model_evaluations.items():
         name = candidate_map.get(model_id, {}).get("name", model_id)
-        # Include per-test variance to help judge assess consistency
         per_test = scores.get("per_test", [])
-        overall_scores = [t.get("overall", 0) for t in per_test if isinstance(t.get("overall"), (int, float))]
+        overall_scores = [
+            t.get("overall", 0) for t in per_test
+            if isinstance(t.get("overall"), (int, float))
+        ]
         if len(overall_scores) > 1:
+            mean = sum(overall_scores) / len(overall_scores)
             variance = round(
-                sum((x - sum(overall_scores) / len(overall_scores)) ** 2 for x in overall_scores) / len(overall_scores),
-                2,
+                sum((x - mean) ** 2 for x in overall_scores) / len(overall_scores), 2
             )
             consistency_note = f"Score variance: {variance:.2f} (lower = more consistent)"
         else:
@@ -462,38 +568,33 @@ def rank_models(
 
     messages = [
         {
+            "role": "system",
+            "content": (
+                "You are a JSON-only responder. You MUST output a single valid JSON object "
+                "and absolutely nothing else — no markdown fences, no preamble, no explanation, "
+                "no thinking tags. Start your response with '{' and end with '}'."
+            ),
+        },
+        {
             "role": "user",
             "content": RANKING_PROMPT.format(
                 task_description=task_description,
                 results_summary=results_summary,
             ),
-        }
+        },
     ]
 
-    raw = call_judge(messages, temperature=0.2, max_tokens=2048)
+    raw = call_judge(messages, temperature=0.2, max_tokens=4096)
 
-    try:
-        ranking = _extract_json_object(raw)
-        return ranking
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.error(f"Failed to parse ranking JSON: {e}")
-        # Build fallback ranking from scores
-        sorted_models = sorted(
-            model_evaluations.items(),
-            key=lambda x: x[1].get("overall", 0),
-            reverse=True,
-        )
-        return {
-            "ranking": [
-                {
-                    "rank": i + 1,
-                    "model_id": mid,
-                    "overall_score": scores["overall"],
-                    "strengths": ["Strong overall performance"],
-                    "weaknesses": [],
-                    "recommendation": f"Ranked #{i+1} by overall score.",
-                }
-                for i, (mid, scores) in enumerate(sorted_models[:3])
-            ],
-            "summary": "Models ranked by aggregated evaluation scores.",
-        }
+    # Build sorted fallback list for use if parsing fails
+    sorted_models = sorted(
+        model_evaluations.items(),
+        key=lambda x: x[1].get("overall", 0),
+        reverse=True,
+    )
+
+    if not raw or raw.startswith("ERROR:"):
+        logger.error(f"Judge LLM returned error or empty response for ranking: {raw[:200]}")
+        return _parse_ranking_result("", sorted_models)
+
+    return _parse_ranking_result(raw, sorted_models)
