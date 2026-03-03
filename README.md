@@ -17,7 +17,7 @@
 
 ## 🎬 Demo
 
-https://github.com/gauravvij/llm-fitness-tracker/raw/main/data/llm-evaluator-runtime.webm
+![Demo](data/llm-evaluator-runtime.gif)
 
 > *Watch the LLM Evaluator Tool in action — from task input to ranked results in minutes.*
 
