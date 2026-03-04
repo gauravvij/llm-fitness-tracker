@@ -70,8 +70,8 @@ Your Task Description
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/gauravvij/llm-fitness-tracker.git
-cd llm-fitness-tracker
+git clone https://github.com/gauravvij/llm-evaluator.git
+cd llm-evaluator
 ```
 
 ### 2. Set Up a Virtual Environment
@@ -188,7 +188,7 @@ Task: Python software engineering assistant
 ## 🏗️ Project Structure
 
 ```
-llm-fitness-tracker/
+llm-evaluator/
 ├── main.py                  # CLI entry point
 ├── requirements.txt         # Python dependencies
 ├── .env.example             # Environment variable template
