@@ -237,6 +237,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 [![Made by NEO](https://img.shields.io/badge/Made%20by-NEO-6C63FF?style=for-the-badge&logo=sparkles&logoColor=white)](https://heyneo.com)
 
-**[heyneo.com](https://heyneo.com)** — AI-powered tools for the modern developer
-
 </div>
