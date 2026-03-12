@@ -27,6 +27,21 @@
 
 LLM Evaluator Tool automates the process of selecting and benchmarking the best LLMs for any task you define. It uses **Gemini 3.1 Pro** (via OpenRouter) as a Judge LLM to fairly evaluate candidate models across multiple dimensions.
 
+### Supported Model Providers
+
+All models are accessed via [OpenRouter](https://openrouter.ai), including:
+
+- **OpenAI** — GPT-4.1, GPT-5.3 Codex
+- **Google** — Gemini 2.5 Pro/Flash, Gemini 3 Flash
+- **Anthropic** — Claude Sonnet 4.5/4.6
+- **DeepSeek** — DeepSeek R1
+- **Meta** — Llama 4 Maverick
+- **Mistral** — Mistral Large
+- **MiniMax** — MiniMax-M2.5 (204K context)
+- **Qwen** — Qwen 3/3.5
+- **Moonshot AI** — Kimi K2.5
+- **ZhipuAI** — GLM-5
+
 ### Core Workflow
 
 ```
@@ -144,7 +159,7 @@ python main.py --task "Creative writing assistant" --output-dir ./results
 |------|-------|---------|-------------|
 | `--task` | `-t` | *(prompted)* | Natural language task description |
 | `--num-tests` | `-n` | `5` | Number of test cases to generate |
-| `--max-candidates` | `-c` | `6` | Max candidate models to evaluate |
+| `--max-candidates` | `-c` | `7` | Max candidate models to evaluate |
 | `--output-dir` | `-o` | `./analysis` | Directory to save JSON report |
 | `--no-save` | — | `False` | Skip saving the JSON report |
 
@@ -163,10 +178,10 @@ Task: Python software engineering assistant
 ✓ Generated 5 test cases
 
 ── Step 2/5 — Discovering Candidate Models ───────────
-✓ Found 6 candidate models
+✓ Found 7 candidate models
 
 ── Step 3/5 — Running Benchmark ──────────────────────
-✓ 30 responses collected
+✓ 35 responses collected
 
 ── Step 4/5 — Evaluating Responses ───────────────────
 ✓ Judge scored all responses
