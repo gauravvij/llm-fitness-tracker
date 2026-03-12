@@ -46,6 +46,7 @@ MODEL_CATEGORIES = {
         "moonshotai/kimi-k2.5",
         "qwen/qwen3.5-397b-a17b",
         "google/gemini-3-flash-preview",
+        "minimax/minimax-m2.5",
     ],
     "math": [
         "google/gemini-2.5-pro",
@@ -54,6 +55,7 @@ MODEL_CATEGORIES = {
         "anthropic/claude-sonnet-4-5",
         "qwen/qwen3-235b-a22b",
         "meta-llama/llama-4-maverick",
+        "minimax/minimax-m2.5",
     ],
     "reasoning": [
         "google/gemini-2.5-pro",
@@ -62,6 +64,7 @@ MODEL_CATEGORIES = {
         "anthropic/claude-sonnet-4-5",
         "meta-llama/llama-4-maverick",
         "mistralai/mistral-large",
+        "minimax/minimax-m2.5",
     ],
     "conversation": [
         "anthropic/claude-sonnet-4-5",
@@ -70,6 +73,7 @@ MODEL_CATEGORIES = {
         "meta-llama/llama-4-maverick",
         "mistralai/mistral-large",
         "google/gemini-2.5-pro",
+        "minimax/minimax-m2.5",
     ],
     "writing": [
         "anthropic/claude-sonnet-4-5",
@@ -78,6 +82,7 @@ MODEL_CATEGORIES = {
         "meta-llama/llama-4-maverick",
         "mistralai/mistral-large",
         "google/gemini-2.5-flash",
+        "minimax/minimax-m2.5",
     ],
     "general": [
         "openai/gpt-4.1",
@@ -86,6 +91,7 @@ MODEL_CATEGORIES = {
         "deepseek/deepseek-r1-0528",
         "meta-llama/llama-4-maverick",
         "mistralai/mistral-large",
+        "minimax/minimax-m2.5",
     ],
 }
 
@@ -93,6 +99,6 @@ MODEL_CATEGORIES = {
 EVAL_DIMENSIONS = ["accuracy", "hallucination", "grounding", "tool_calling", "clarity"]
 
 # Benchmarking settings
-MAX_CANDIDATES = 6
+MAX_CANDIDATES = 7
 MAX_TEST_CASES = 5
 REQUEST_TIMEOUT = 60  # seconds
