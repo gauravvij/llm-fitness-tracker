@@ -9,13 +9,34 @@ from pathlib import Path
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 JUDGE_MODEL_ID = "google/gemini-3.1-pro-preview"
 
+# MiniMax configuration
+MINIMAX_BASE_URL = "https://api.minimax.io/v1"
+
+# Supported providers
+SUPPORTED_PROVIDERS = ["openrouter", "minimax"]
+
 # Credential path
 OPENROUTER_CONFIG_PATH = Path.home() / ".config" / "openrouter" / "config"
 
 
-def load_api_key() -> str:
-    """Load OpenRouter API key from config file or environment variable."""
-    # Try environment variable first
+def load_api_key(provider: str = "openrouter") -> str:
+    """Load API key for the given provider from environment variable or config file.
+
+    Args:
+        provider: LLM provider name ('openrouter' or 'minimax')
+
+    Returns:
+        API key string
+    """
+    if provider == "minimax":
+        api_key = os.environ.get("MINIMAX_API_KEY", "")
+        if api_key:
+            return api_key
+        raise ValueError(
+            "MiniMax API key not found. Set the MINIMAX_API_KEY environment variable."
+        )
+
+    # OpenRouter: try environment variable first
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if api_key:
         return api_key
@@ -88,6 +109,22 @@ MODEL_CATEGORIES = {
         "mistralai/mistral-large",
     ],
 }
+
+# MiniMax models (available for all task categories)
+MINIMAX_MODELS = [
+    {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax M2.5",
+        "context_length": 204000,
+        "pricing": {},
+    },
+    {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax M2.5 Highspeed",
+        "context_length": 204000,
+        "pricing": {},
+    },
+]
 
 # Evaluation dimensions
 EVAL_DIMENSIONS = ["accuracy", "hallucination", "grounding", "tool_calling", "clarity"]

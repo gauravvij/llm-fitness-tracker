@@ -1,4 +1,4 @@
-"""OpenRouter API client for LLM interactions."""
+"""LLM API client supporting OpenRouter and MiniMax providers."""
 
 import time
 import logging
@@ -6,18 +6,43 @@ import sys
 from typing import Optional
 from openai import OpenAI
 
-from .config import OPENROUTER_BASE_URL, load_api_key
+from .config import OPENROUTER_BASE_URL, MINIMAX_BASE_URL, load_api_key
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler(sys.stdout))
 
+# Module-level provider setting (set by main.py based on CLI args)
+_active_provider: str = "openrouter"
 
-def get_client() -> OpenAI:
-    """Create and return an OpenAI-compatible OpenRouter client."""
-    api_key = load_api_key()
+
+def set_provider(provider: str) -> None:
+    """Set the active LLM provider for candidate model calls."""
+    global _active_provider
+    _active_provider = provider
+
+
+def get_provider() -> str:
+    """Get the active LLM provider."""
+    return _active_provider
+
+
+def get_client(provider: str = "openrouter") -> OpenAI:
+    """Create and return an OpenAI-compatible client for the given provider.
+
+    Args:
+        provider: LLM provider name ('openrouter' or 'minimax')
+
+    Returns:
+        OpenAI client configured for the specified provider
+    """
+    if provider == "minimax":
+        return OpenAI(
+            base_url=MINIMAX_BASE_URL,
+            api_key=load_api_key("minimax"),
+        )
     return OpenAI(
         base_url=OPENROUTER_BASE_URL,
-        api_key=api_key,
+        api_key=load_api_key("openrouter"),
     )
 
 
@@ -27,34 +52,49 @@ def call_llm(
     temperature: float = 0.7,
     max_tokens: int = 4096,
     timeout: int = 60,
+    provider: Optional[str] = None,
 ) -> tuple[str, float]:
     """
-    Call an LLM via OpenRouter and return (response_text, latency_seconds).
+    Call an LLM and return (response_text, latency_seconds).
 
     Args:
-        model: OpenRouter model ID (e.g. 'google/gemini-3.1-pro-preview')
+        model: Model ID (e.g. 'google/gemini-3.1-pro-preview' or 'MiniMax-M2.5')
         messages: List of message dicts with 'role' and 'content'
         temperature: Sampling temperature
         max_tokens: Maximum tokens in response
         timeout: Request timeout in seconds
+        provider: LLM provider override (defaults to active provider)
 
     Returns:
         Tuple of (response_text, latency_in_seconds)
     """
-    client = get_client()
+    if provider is None:
+        provider = _active_provider
+
+    # MiniMax requires temperature in (0.0, 1.0] — clamp if needed
+    if provider == "minimax":
+        if temperature <= 0.0:
+            temperature = 0.01
+        if temperature > 1.0:
+            temperature = 1.0
+
+    client = get_client(provider)
     start = time.time()
     try:
-        response = client.chat.completions.create(
+        kwargs = dict(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
-            extra_headers={
+        )
+        # Add OpenRouter-specific headers
+        if provider == "openrouter":
+            kwargs["extra_headers"] = {
                 "HTTP-Referer": "https://llm-fitness-tool",
                 "X-Title": "LLM Fitness Tool",
-            },
-        )
+            }
+        response = client.chat.completions.create(**kwargs)
         latency = time.time() - start
         # Guard against None choices or content
         if not response.choices or response.choices[0].message is None:
@@ -69,7 +109,10 @@ def call_llm(
 
 def call_judge(messages: list[dict], temperature: float = 0.3, max_tokens: int = 8192) -> str:
     """
-    Call the Judge LLM (Gemini 3.1 Pro) and return response text.
+    Call the Judge LLM (Gemini 3.1 Pro via OpenRouter) and return response text.
+
+    The Judge always uses OpenRouter regardless of the active provider,
+    since the Judge model (Gemini) is only available through OpenRouter.
 
     Args:
         messages: List of message dicts
@@ -86,5 +129,6 @@ def call_judge(messages: list[dict], temperature: float = 0.3, max_tokens: int =
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=120,
+        provider="openrouter",
     )
     return response

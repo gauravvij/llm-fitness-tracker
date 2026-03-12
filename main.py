@@ -17,7 +17,7 @@ from rich.rule import Rule
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.config import load_api_key, MAX_TEST_CASES, MAX_CANDIDATES
+from src.config import load_api_key, MAX_TEST_CASES, MAX_CANDIDATES, SUPPORTED_PROVIDERS
 from src.suite_generator import generate_test_suite
 from src.model_discovery import discover_candidate_models
 from src.benchmarker import run_benchmark, compute_latency_stats
@@ -141,6 +141,7 @@ Examples:
   python main.py --task "Python software engineering assistant"
   python main.py --task "Math tutoring for high school students" --num-tests 3
   python main.py --task "Customer support chatbot" --max-candidates 4 --no-save
+  python main.py --task "Code review assistant" --provider minimax
   python main.py  # Interactive mode (prompts for task)
         """,
     )
@@ -173,27 +174,47 @@ Examples:
         action="store_true",
         help="Do not save JSON report to disk",
     )
+    parser.add_argument(
+        "--provider", "-p",
+        type=str,
+        choices=SUPPORTED_PROVIDERS,
+        default="openrouter",
+        help="LLM provider for candidate models (default: openrouter)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     """Main entry point for the LLM Evaluator Tool CLI."""
-    # Validate API key early
+    args = parse_args()
+
+    # Set the active provider for candidate model calls
+    from src.openrouter_client import set_provider
+    set_provider(args.provider)
+
+    # Validate API keys: always need OpenRouter (for Judge), plus provider key
     try:
-        load_api_key()
+        load_api_key("openrouter")
     except ValueError as e:
-        console.print(f"[bold red]❌ Configuration Error:[/bold red] {e}")
+        console.print(f"[bold red]❌ Configuration Error (OpenRouter — required for Judge LLM):[/bold red] {e}")
         sys.exit(1)
 
-    args = parse_args()
+    if args.provider != "openrouter":
+        try:
+            load_api_key(args.provider)
+        except ValueError as e:
+            console.print(f"[bold red]❌ Configuration Error ({args.provider}):[/bold red] {e}")
+            sys.exit(1)
 
     # Get task description — from arg or interactive prompt
     task_description = args.task
     if not task_description:
+        provider_label = args.provider.capitalize()
         console.print(Panel(
             "[bold cyan]Welcome to the LLM Fitness Tool![/bold cyan]\n\n"
             "This tool automatically selects and evaluates the best LLMs for your task.\n"
-            "It uses [bold]Gemini 3.1 Pro[/bold] as the Judge LLM via OpenRouter.",
+            "It uses [bold]Gemini 3.1 Pro[/bold] as the Judge LLM via OpenRouter.\n"
+            f"Candidate models provided by: [bold]{provider_label}[/bold]",
             border_style="cyan",
         ))
         task_description = Prompt.ask(
