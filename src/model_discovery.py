@@ -8,8 +8,8 @@ from typing import Optional
 
 import requests
 
-from .config import OPENROUTER_BASE_URL, MODEL_CATEGORIES, MAX_CANDIDATES, load_api_key
-from .openrouter_client import call_judge
+from .config import OPENROUTER_BASE_URL, MODEL_CATEGORIES, MINIMAX_MODELS, MAX_CANDIDATES, load_api_key
+from .openrouter_client import call_judge, get_provider
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler(sys.stdout))
@@ -78,28 +78,41 @@ def fetch_available_models() -> list[dict]:
         return []
 
 
-def discover_candidate_models(task_description: str, max_candidates: int = MAX_CANDIDATES) -> list[dict]:
+def discover_candidate_models(
+    task_description: str,
+    max_candidates: int = MAX_CANDIDATES,
+    provider: str | None = None,
+) -> list[dict]:
     """
-    Discover top candidate LLMs for the given task via OpenRouter.
+    Discover top candidate LLMs for the given task.
 
-    Strategy:
-    1. Detect task category using Judge LLM
-    2. Fetch available models from OpenRouter
-    3. Filter to known top performers for the category
-    4. Return enriched model metadata
+    For OpenRouter: detects task category and selects from known top performers.
+    For MiniMax: returns the available MiniMax models directly.
 
     Args:
         task_description: Natural language task description
         max_candidates: Maximum number of candidate models to return
+        provider: LLM provider override (defaults to active provider)
 
     Returns:
         List of candidate model dicts with id, name, category, context_length
     """
+    if provider is None:
+        provider = get_provider()
+
     logger.info("Detecting task category...")
     category = detect_task_category(task_description)
     logger.info(f"Detected category: {category}")
 
-    # Get preferred models for this category
+    # MiniMax provider: return fixed model list
+    if provider == "minimax":
+        candidates = []
+        for model in MINIMAX_MODELS:
+            candidates.append({**model, "category": category})
+        logger.info(f"Using {len(candidates)} MiniMax models for category '{category}'")
+        return candidates[:max_candidates]
+
+    # OpenRouter provider: dynamic discovery
     preferred_ids = MODEL_CATEGORIES.get(category, MODEL_CATEGORIES["general"])
 
     # Fetch live model list from OpenRouter

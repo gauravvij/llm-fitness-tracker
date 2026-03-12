@@ -6,6 +6,7 @@
 
 [![Made by NEO](https://img.shields.io/badge/Made%20by-NEO-6C63FF?style=for-the-badge&logo=sparkles&logoColor=white)](https://heyneo.com)
 [![OpenRouter](https://img.shields.io/badge/Powered%20by-OpenRouter-FF6B6B?style=for-the-badge)](https://openrouter.ai)
+[![MiniMax](https://img.shields.io/badge/Supports-MiniMax-5B6EE1?style=for-the-badge)](https://www.minimaxi.com)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge)](LICENSE)
 
@@ -26,6 +27,13 @@
 ## ✨ What It Does
 
 LLM Evaluator Tool automates the process of selecting and benchmarking the best LLMs for any task you define. It uses **Gemini 3.1 Pro** (via OpenRouter) as a Judge LLM to fairly evaluate candidate models across multiple dimensions.
+
+### Supported Providers
+
+| Provider | Candidate Models | Description |
+|----------|-----------------|-------------|
+| [OpenRouter](https://openrouter.ai) | GPT-4.1, Gemini 2.5 Pro, Claude Sonnet 4.5, DeepSeek R1, Llama 4, Mistral Large, … | Default. Broad model selection via OpenRouter's unified API |
+| [MiniMax](https://www.minimaxi.com) | MiniMax-M2.5, MiniMax-M2.5-highspeed | High-performance models with 204K context window |
 
 ### Core Workflow
 
@@ -82,21 +90,25 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure Your OpenRouter API Key
+### 3. Configure API Keys
 
-The tool requires an [OpenRouter](https://openrouter.ai) API key. **Never hardcode your key** — use one of the two methods below:
+The tool requires an [OpenRouter](https://openrouter.ai) API key (used for the Judge LLM). If you want to evaluate [MiniMax](https://www.minimaxi.com) models, you'll also need a MiniMax API key.
 
-#### Option A — Environment Variable (Recommended)
+#### Option A — Environment Variables (Recommended)
 
 ```bash
+# Required — OpenRouter (used for Judge LLM)
 export OPENROUTER_API_KEY="sk-or-v1-your-key-here"
+
+# Optional — MiniMax (needed when using --provider minimax)
+export MINIMAX_API_KEY="your-minimax-api-key-here"
 ```
 
-Add this to your `~/.bashrc` or `~/.zshrc` to persist across sessions.
+Add these to your `~/.bashrc` or `~/.zshrc` to persist across sessions.
 
 #### Option B — `.env` File
 
-Copy the example file and fill in your key:
+Copy the example file and fill in your keys:
 
 ```bash
 cp .env.example .env
@@ -106,9 +118,12 @@ Edit `.env`:
 
 ```env
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
+MINIMAX_API_KEY=your-minimax-api-key-here
 ```
 
-> 🔑 **Get your free API key at [openrouter.ai/keys](https://openrouter.ai/keys)**
+> 🔑 **Get your OpenRouter key at [openrouter.ai/keys](https://openrouter.ai/keys)**
+>
+> 🔑 **Get your MiniMax key at [platform.minimaxi.com](https://platform.minimaxi.com)**
 
 ---
 
@@ -125,7 +140,7 @@ You'll be prompted to enter your task description.
 ### CLI Mode
 
 ```bash
-# Evaluate LLMs for a coding task
+# Evaluate LLMs for a coding task (default: OpenRouter)
 python main.py --task "Python software engineering assistant"
 
 # Math tutoring with 3 test cases
@@ -133,6 +148,9 @@ python main.py --task "Math tutoring for high school students" --num-tests 3
 
 # Customer support with 4 candidates, no report saved
 python main.py --task "Customer support chatbot" --max-candidates 4 --no-save
+
+# Evaluate MiniMax models
+python main.py --task "Code review assistant" --provider minimax
 
 # Custom output directory
 python main.py --task "Creative writing assistant" --output-dir ./results
@@ -147,6 +165,7 @@ python main.py --task "Creative writing assistant" --output-dir ./results
 | `--max-candidates` | `-c` | `6` | Max candidate models to evaluate |
 | `--output-dir` | `-o` | `./analysis` | Directory to save JSON report |
 | `--no-save` | — | `False` | Skip saving the JSON report |
+| `--provider` | `-p` | `openrouter` | LLM provider for candidate models (`openrouter` or `minimax`) |
 
 ---
 
